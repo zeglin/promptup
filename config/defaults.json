@@ -1,0 +1,9 @@
+{
+  "enabled": false,
+  "mode": "show-and-send",
+  "level": "medium",
+  "language": "auto",
+  "minLength": 20,
+  "skipPatterns": [],
+  "customInstructions": ""
+}

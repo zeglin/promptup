@@ -1,0 +1,15 @@
+{
+  "name": "promptup",
+  "version": "1.0.0",
+  "description": "Automatically improves your prompts — better language, clearer instructions, smarter structure",
+  "author": {
+    "name": "Voy Zeglin",
+    "url": "https://github.com/zeglin"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/zeglin/promptup",
+  "repository": "https://github.com/zeglin/promptup",
+  "keywords": ["prompt", "rewriting", "language", "productivity"],
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks.json"
+}
