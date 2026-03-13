@@ -22,7 +22,7 @@ try:
         print('true' if val else 'false')
     else:
         print(val if val is not None else '')
-except:
+except Exception:
     sys.exit(1)
 PYEOF
 }
@@ -43,6 +43,7 @@ _validate_language() {
 
 _load_defaults() {
   local def="$PROMPTUP_DEFAULTS_PATH"
+  # Hardcoded: spec says missing config file = disabled (never read enabled from defaults)
   PROMPTUP_ENABLED="false"
   PROMPTUP_MODE="$(_json_field "$def" "mode")"
   PROMPTUP_LEVEL="$(_json_field "$def" "level")"
@@ -105,6 +106,10 @@ load_config() {
   # Read skipPatterns (newline-separated)
   PROMPTUP_SKIP_PATTERNS="$(_json_field "$cfg" "skipPatterns")"
 
-  # Read customInstructions
+  # Read and validate customInstructions (max 500 characters)
   PROMPTUP_CUSTOM_INSTRUCTIONS="$(_json_field "$cfg" "customInstructions")"
+  if [ "${#PROMPTUP_CUSTOM_INSTRUCTIONS}" -gt 500 ]; then
+    echo "[PromptUp] Invalid value for \"customInstructions\": exceeds 500 characters, using default" >&2
+    PROMPTUP_CUSTOM_INSTRUCTIONS=""
+  fi
 }
