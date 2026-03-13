@@ -653,12 +653,12 @@ teardown() {
 _make_stdin() {
   # Build JSON stdin matching Claude Code's UserPromptSubmit format
   local prompt="$1"
-  python3 -c "import json; print(json.dumps({'session_id':'test','hook_event_name':'UserPromptSubmit','prompt':$(python3 -c "import json,sys; print(json.dumps(sys.stdin.read()))" <<< "$prompt"),'cwd':'/tmp'}))"
+  python3 -c "import json, sys; print(json.dumps({'session_id':'test','hook_event_name':'UserPromptSubmit','prompt':sys.argv[1],'cwd':'/tmp'}))" "$prompt"
 }
 
 @test "hook passes through when config missing (disabled)" {
   rm -f "$PROMPTUP_CONFIG_PATH"
-  run bash -c '$(_make_stdin "Please fix the auth bug in the login module") | '"$HOOK"
+  _make_stdin "Please fix the auth bug in the login module" | run "$HOOK"
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 }
@@ -780,7 +780,7 @@ INSTRUCTIONS
     light)
       cat <<'INSTRUCTIONS'
 
-LEVEL: Light
+Rewrite level: Light
 - Fix typos, grammar, punctuation, and clarity
 - Do not change structure or add new content
 INSTRUCTIONS
@@ -788,7 +788,7 @@ INSTRUCTIONS
     medium)
       cat <<'INSTRUCTIONS'
 
-LEVEL: Medium
+Rewrite level: Medium
 - Fix typos, grammar, punctuation, and clarity
 - Add specificity and remove ambiguity where possible
 - Improve structure and formatting for readability
@@ -798,7 +798,7 @@ INSTRUCTIONS
     deep)
       cat <<'INSTRUCTIONS'
 
-LEVEL: Deep
+Rewrite level: Deep
 - Fix typos, grammar, punctuation, and clarity
 - Add specificity and remove ambiguity where possible
 - Improve structure and formatting for readability
@@ -838,7 +838,7 @@ INSTRUCTIONS
 
 DISPLAY: Before your response, show the rewritten prompt in this exact format:
 
-[PromptUp] Rewritten (LEVEL):
+[PromptUp] Rewritten ({{LEVEL}}):
 > <your rewritten prompt here>
 
 Then respond to the rewritten version below that.
@@ -856,12 +856,13 @@ INSTRUCTIONS
 
 INSTRUCTIONS="$(build_rewrite_instructions "$PROMPTUP_LEVEL" "$PROMPTUP_MODE" "$PROMPTUP_LANGUAGE" "$PROMPTUP_CUSTOM_INSTRUCTIONS")"
 
-# Replace LEVEL placeholder with actual level name
-INSTRUCTIONS="${INSTRUCTIONS//LEVEL/$PROMPTUP_LEVEL}"
+# Replace {{LEVEL}} placeholder with actual level name
+INSTRUCTIONS="${INSTRUCTIONS//\{\{LEVEL\}\}/$PROMPTUP_LEVEL}"
 
 # Output JSON with additionalContext
-python3 -c "
-import json, os, sys
+export PROMPTUP_INSTRUCTIONS="$INSTRUCTIONS"
+python3 - <<'PYEOF' 2>/dev/null
+import json, os
 instructions = os.environ['PROMPTUP_INSTRUCTIONS']
 output = {
     'hookSpecificOutput': {
@@ -870,16 +871,9 @@ output = {
     }
 }
 print(json.dumps(output))
-" <<< "" 2>/dev/null
+PYEOF
 
 exit 0
-```
-
-Note: The `PROMPTUP_INSTRUCTIONS` env var is set before calling python3:
-
-Insert before the python3 call:
-```bash
-export PROMPTUP_INSTRUCTIONS="$INSTRUCTIONS"
 ```
 
 - [ ] **Step 4: Make hook executable**
