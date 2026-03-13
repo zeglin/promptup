@@ -3,21 +3,30 @@
 **Date:** 2026-03-13
 **Repository:** github.com/zeglin/promptup
 **License:** MIT
-**Status:** Draft
+**Status:** Draft v2 (revised after hook contract review)
 
 ## Overview
 
-PromptUp is a Claude Code plugin that automatically improves user prompts before they reach the model. It fixes language issues, adds clarity and structure, corrects typos, and optionally leverages codebase context to make prompts more effective.
+PromptUp is a Claude Code plugin that improves user prompts — fixing language, adding clarity and structure, correcting typos, and leveraging codebase context to make prompts more effective.
 
 It operates in two modes:
-- **Always-on** — a `UserPromptSubmit` hook intercepts and rewrites prompts automatically
-- **Manual** — the `/pp` slash command rewrites a single prompt on demand
+- **Always-on** — a `UserPromptSubmit` hook injects rewriting instructions into Claude's context via `additionalContext`, so Claude rewrites the prompt as part of its response
+- **Manual** — the `/pp` slash command triggers rewriting on demand
+
+### Architecture Note: Why Context Injection
+
+Claude Code's `UserPromptSubmit` hooks **cannot replace** the user's prompt. They can only:
+- Pass through (exit 0, no output)
+- Add context (exit 0, JSON with `additionalContext`)
+- Block (exit 2)
+
+PromptUp uses the **context injection** approach: when always-on mode is active, the hook injects rewriting instructions as `additionalContext`. Claude sees both the original prompt and the instructions, rewrites the prompt inline, displays the improved version as `[PromptUp] ...`, and then responds to the improved version. No external API calls are needed — Claude itself does the rewriting using its own session model.
 
 ## Goals
 
 1. Make every prompt clearer, more specific, and more effective for AI consumption
 2. Preserve the user's original intent — improve how they ask, never change what they ask
-3. Be lightweight and fast — use the cheapest model by default, skip trivial prompts
+3. Be lightweight and fast — no external API calls, no separate model, zero latency overhead beyond the hook script
 4. Be fully configurable — smart defaults, but the user controls everything
 5. Be transparent — show users what was changed (default: show-and-send mode)
 
@@ -27,6 +36,7 @@ It operates in two modes:
 - Paid tiers or monetization
 - Custom model hosting or fine-tuning
 - Prompt history or analytics
+- External API calls from the hook (the session model does the rewriting)
 
 ## Plugin Structure
 
@@ -35,10 +45,13 @@ promptup/
 ├── .claude-plugin/
 │   └── plugin.json              # Plugin manifest
 ├── skills/
-│   ├── pp.md                    # /pp skill — manual prompt rewriting
-│   └── pp-config.md             # /pp-config skill — toggle settings
+│   ├── pp/
+│   │   └── SKILL.md             # /pp skill — manual prompt rewriting
+│   └── pp-config/
+│       └── SKILL.md             # /pp-config skill — toggle settings
 ├── hooks/
-│   └── promptup-hook.sh         # UserPromptSubmit hook — smart-skip + auto-rewrite
+│   ├── hooks.json               # Hook declarations
+│   └── promptup-hook.sh         # UserPromptSubmit hook — smart-skip + context injection
 ├── config/
 │   └── defaults.json            # Default configuration values
 ├── LICENSE                      # MIT
@@ -54,29 +67,43 @@ promptup/
   "name": "promptup",
   "version": "1.0.0",
   "description": "Automatically improves your prompts — better language, clearer instructions, smarter structure",
-  "author": "zeglin",
+  "author": {
+    "name": "Voy Zeglin",
+    "url": "https://github.com/zeglin"
+  },
   "license": "MIT",
   "homepage": "https://github.com/zeglin/promptup",
-  "skills": [
-    "skills/pp.md",
-    "skills/pp-config.md"
-  ],
+  "repository": "https://github.com/zeglin/promptup",
+  "keywords": ["prompt", "rewriting", "language", "productivity"],
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks.json"
+}
+```
+
+### 2. Hook Declarations (`hooks/hooks.json`)
+
+```json
+{
   "hooks": {
     "UserPromptSubmit": [
       {
-        "type": "command",
-        "command": "hooks/promptup-hook.sh"
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/promptup-hook.sh"
+          }
+        ]
       }
     ]
   }
 }
 ```
 
-### 2. `/pp` Skill (`skills/pp.md`)
+### 3. `/pp` Skill (`skills/pp/SKILL.md`)
 
 The manual prompt rewriting skill. Invoked as `/pp <user prompt>`.
 
-Reads configuration from `~/.claude/promptup.json` and applies the rewriting prompt at the configured level.
+Reads configuration from `~/.claude/promptup.json` and applies the rewriting instructions at the configured level. In manual mode, Claude itself performs the rewriting — identical to how the always-on hook works, but triggered explicitly.
 
 **Rewriting levels:**
 
@@ -90,11 +117,11 @@ Reads configuration from `~/.claude/promptup.json` and applies the rewriting pro
 
 1. **Preserve intent** — never change what the user is asking for
 2. **Don't inflate** — don't add requirements the user didn't express or imply
-3. **Be transparent** — in show-and-send mode, prefix with a `[PromptUp]` marker
+3. **Be transparent** — display the rewritten prompt before responding
 4. **Language respect** — detect input language per-prompt and respond in kind
 5. **Context-awareness** — in deep mode, consider working directory, conversation, and file context
 
-### 3. `/pp-config` Skill (`skills/pp-config.md`)
+### 4. `/pp-config` Skill (`skills/pp-config/SKILL.md`)
 
 Conversational configuration interface. Manages `~/.claude/promptup.json`.
 
@@ -115,49 +142,75 @@ Conversational configuration interface. Manages `~/.claude/promptup.json`.
 - **`minLength`** must be a non-negative integer (0 is valid — disables length-based skipping). Negative values are rejected.
 - **`customInstructions`** exceeding 500 characters is rejected (never silently truncated).
 - **`language`** must be `auto` or valid ISO 639-1 codes (optionally `+`-joined). Invalid codes are rejected.
-- **`mode`**, **`level`**, **`model`** must be one of their documented enum values or a valid full model ID (for `model`).
+- **`mode`**, **`level`** must be one of their documented enum values.
 
-### 4. Hook Script (`hooks/promptup-hook.sh`)
+### 5. Hook Script (`hooks/promptup-hook.sh`)
 
-The `UserPromptSubmit` hook script runs before every prompt when always-on mode is enabled.
+The `UserPromptSubmit` hook script runs on every prompt submission.
+
+**Input:** Receives JSON on stdin from Claude Code:
+```json
+{
+  "session_id": "abc123",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "the user's prompt text",
+  "cwd": "/current/working/directory"
+}
+```
+
+The hook extracts `.prompt` from the JSON input using `python3` or `jq`.
 
 **Smart-skip decision flow:**
 
 ```
-User prompt arrives
+JSON stdin arrives → extract .prompt
     │
-    ├─ Is PromptUp enabled in config? ── No ──→ Pass through unchanged
+    ├─ Is PromptUp enabled in config? ── No ──→ Exit 0 (pass through)
     │
-    ├─ Is prompt below minLength? ── Yes ──→ Pass through
-    │   (default: 20 characters)
+    ├─ Is prompt a slash command? ── Yes ──→ Exit 0 (pass through)
+    │   (starts with "/")
     │
-    ├─ Does prompt match trivial patterns? ── Yes ──→ Pass through
+    ├─ Is prompt below minLength? ── Yes ──→ Exit 0 (pass through)
+    │   (default: 20 characters, but trivials still caught)
+    │
+    ├─ Does prompt match trivial patterns? ── Yes ──→ Exit 0 (pass through)
     │   Built-in: yes, no, ok, sure, yep, nope, right, correct,
     │   continue, go ahead, do it, fix it, try again, looks good,
     │   lgtm, ship it, pure numbers, single characters
     │   + user-defined skipPatterns from config
     │
-    ├─ Is prompt a slash command? ── Yes ──→ Pass through
-    │   (starts with "/", including "/pp" — the hook never
-    │    intercepts manual /pp invocations)
-    │
-    └─ Qualifies for rewrite ──→ Inject rewrite instruction
+    └─ Qualifies ──→ Output JSON with additionalContext
 ```
+
+**Hook output protocol (context injection):**
+
+When a prompt qualifies for rewriting, the hook outputs JSON to stdout:
+
+```json
+{
+  "hookSpecificOutput": {
+    "hookEventName": "UserPromptSubmit",
+    "additionalContext": "<rewriting instructions>"
+  }
+}
+```
+
+The `additionalContext` contains rewriting instructions tailored to the configured level, language, and custom instructions. Claude receives both the user's original prompt and these instructions, then:
+1. Rewrites the prompt according to the instructions
+2. Displays the improved version as `[PromptUp] Rewritten (level):\n> improved prompt`
+3. Responds to the improved version
+
+**Pass through:** Exit 0 with no stdout output. The original prompt is processed normally.
+
+**Fail-open:** Any error (config parse failure, missing python3, etc.) results in exit 0 with no output — the original prompt passes through unchanged. The hook must never block prompt submission.
 
 The hook reads `~/.claude/promptup.json` for configuration. If the file doesn't exist, PromptUp is considered disabled (manual-only mode via `/pp`).
 
-**Config error fallback:** If the config file exists but is malformed JSON or unreadable (permissions error), the hook treats PromptUp as disabled and writes a warning to stderr (e.g., `[PromptUp] Config error: invalid JSON in ~/.claude/promptup.json, skipping rewrite`). The hook must never fail hard or block prompt submission.
+**Config error fallback:** If the config file exists but is malformed JSON or unreadable (permissions error), the hook treats PromptUp as disabled and writes a warning to stderr (e.g., `[PromptUp] Config error: invalid JSON in ~/.claude/promptup.json, skipping`). The hook must never fail hard or block prompt submission.
 
-**Invalid field values:** If the config file contains valid JSON but with invalid field values (e.g., `"language": "xx"`, `"level": "ultra"`), the hook falls back to the default value for that specific field and writes a warning to stderr (e.g., `[PromptUp] Invalid value for "language": "xx", using default "auto"`). Other valid fields in the config are still respected — only the invalid field falls back.
+**Invalid field values:** If the config file contains valid JSON but with invalid field values (e.g., `"language": "xxx"`, `"level": "ultra"`), the hook falls back to the default value for that specific field and writes a warning to stderr. Other valid fields are still respected.
 
-**Hook output protocol:** The hook follows the Claude Code `UserPromptSubmit` hook contract:
-- **Pass through (no rewrite):** Exit with code 0 and produce no stdout. The original prompt is sent unchanged.
-- **Rewrite:** Exit with code 0 and write the rewritten prompt to stdout. This replaces the user's original prompt.
-- **Error/abort:** Exit with non-zero code. The original prompt is sent unchanged (fail-open).
-- **Display notes:** The `[PromptUp]` display block (in `show-and-send` mode) is written to stderr, which appears in the Claude Code terminal output. It must never be written to stdout, as stdout is the prompt payload.
-- **In `/pp` mode:** Output is written as normal skill output to the conversation (not via stdout/stderr).
-
-**Hook and `/pp` interaction:** The slash-command check ensures the hook always passes through `/pp` invocations unchanged. There is no double-rewrite risk — the hook and `/pp` are mutually exclusive code paths.
+**Hook and `/pp` interaction:** The slash-command check ensures the hook always passes through `/pp` invocations unchanged. There is no double-rewrite risk.
 
 ## Configuration
 
@@ -170,7 +223,6 @@ Stored at `~/.claude/promptup.json`.
   "enabled": false,
   "mode": "show-and-send",
   "level": "medium",
-  "model": "haiku",
   "language": "auto",
   "minLength": 20,
   "skipPatterns": [],
@@ -185,11 +237,12 @@ Stored at `~/.claude/promptup.json`.
 | `enabled` | boolean | `false` | `true` = always-on hook active, `false` = manual `/pp` only |
 | `mode` | string | `"show-and-send"` | Display mode: `silent`, `show-and-confirm`, `show-and-send` |
 | `level` | string | `"medium"` | Rewrite level: `light`, `medium`, `deep` |
-| `model` | string | `"haiku"` | Model for rewriting: `haiku`, `sonnet`, `opus` |
 | `language` | string | `"auto"` | `auto` = per-prompt detection, ISO 639-1 code (`en`) = specific language, `+`-joined codes (`en+pl`) = bilingual/multilingual constraint (2+ languages supported) |
 | `minLength` | integer | `20` | Minimum character count to trigger rewriting |
 | `skipPatterns` | string[] | `[]` | Additional exact-match patterns to skip, case-insensitive (merged with built-in list). Each entry is matched as a full-string exact match against the trimmed, lowercased, punctuation-stripped prompt. Punctuation stripping removes trailing `.!?,;:` characters so that "go ahead." matches "go ahead". |
-| `customInstructions` | string | `""` | Extra instructions appended after the rewriting system prompt but before the user's prompt. Max 500 characters — values exceeding this are rejected by `/pp-config set` with an error (never silently truncated). Treated as plain text (no prompt template syntax). Applied in both `/pp` and hook paths identically. |
+| `customInstructions` | string | `""` | Extra instructions appended to the rewriting context. Max 500 characters — values exceeding this are rejected by `/pp-config set` with an error (never silently truncated). Treated as plain text. Applied in both `/pp` and hook paths identically. |
+
+**Note:** The `model` field has been removed. Since Claude itself performs the rewriting (no external API call), the session's current model is always used. This is simpler, cheaper, and eliminates the API key requirement.
 
 ### Language Handling
 
@@ -207,26 +260,26 @@ Stored at `~/.claude/promptup.json`.
 
 | Mode | Behavior | Availability |
 |------|----------|-------------|
-| `silent` | Rewrites and sends directly. No indication to user. | Hook + `/pp` |
-| `show-and-confirm` | Shows original vs improved, waits for user approval before sending. | `/pp` only |
-| `show-and-send` | Displays a brief `[PromptUp]` note showing what changed, sends automatically. | Hook + `/pp` |
+| `silent` | Claude rewrites internally and responds to the improved version. No visible rewrite shown. | Hook + `/pp` |
+| `show-and-confirm` | Shows original vs improved, waits for user approval before responding. | `/pp` only |
+| `show-and-send` | Claude displays the improved prompt as `[PromptUp] ...` then responds to it. | Hook + `/pp` |
 
-**Note:** `show-and-confirm` is only available in manual `/pp` mode, where the skill can present options and wait for user input. In always-on hook mode, `show-and-confirm` is treated as `show-and-send` with a warning written to stderr (e.g., `[PromptUp] show-and-confirm is not supported in hook mode, using show-and-send`). This is because shell hooks cannot pause for interactive user input.
+**Note:** `show-and-confirm` is only available in manual `/pp` mode. In always-on hook mode, the rewriting instructions request `show-and-send` behavior regardless, since the hook cannot pause for interactive user input.
 
 ### Display Format (`show-and-send`)
 
-When in `show-and-send` mode, the output format is:
+When in `show-and-send` mode, Claude displays:
 
 ```
 [PromptUp] Rewritten (medium):
 > <full rewritten prompt>
 ```
 
-This shows the rewrite level used and the complete rewritten prompt so the user can see exactly what was sent. The same format is used in both hook and `/pp` paths for consistency.
+This is shown before Claude's actual response. The user sees their original prompt followed by the improved version, then Claude's response to the improved version.
 
-**No-change suppression:** If the rewritten prompt is identical to the original (or differs only in whitespace):
-- **Hook mode:** The `[PromptUp]` display is suppressed entirely and the original prompt is sent unchanged (silent pass-through).
-- **`/pp` mode:** Displays `[PromptUp] Your prompt looks good as-is — sent unchanged.` so the user knows the command worked.
+**No-change suppression:** If Claude determines the prompt is already well-formed and rewriting produces no meaningful change:
+- **Hook mode:** Claude simply responds normally without showing a `[PromptUp]` block.
+- **`/pp` mode:** Displays `[PromptUp] Your prompt looks good as-is — sent unchanged.`
 
 ## Distribution
 
@@ -252,15 +305,3 @@ This shows the rewrite level used and the complete rewritten prompt so the user 
 - **URL:** github.com/zeglin/promptup
 - **License:** MIT
 - **Target:** Official Anthropic marketplace submission
-
-## Model Versioning
-
-The `model` field uses friendly aliases that map to the latest available version of each model tier:
-
-| Alias | Floating API alias |
-|-------|-------------------|
-| `haiku` | `claude-haiku-4-5` |
-| `sonnet` | `claude-sonnet-4-6` |
-| `opus` | `claude-opus-4-6` |
-
-These friendly names map to Anthropic's floating aliases, which always resolve to the latest version of that model tier. The exact alias strings may change as Anthropic releases new models — the implementation should resolve these at build time against the current Anthropic model catalog. Users who need a pinned snapshot can set the full versioned model ID directly (e.g., `"model": "claude-haiku-4-5-20251001"`) — any valid Anthropic model ID is accepted.
