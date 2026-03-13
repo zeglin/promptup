@@ -1,0 +1,9 @@
+{
+  "enabled": true,
+  "mode": "show-and-send",
+  "level": "deep",
+  "language": "en+pl",
+  "minLength": 30,
+  "skipPatterns": ["cheers"],
+  "customInstructions": "Use formal tone"
+}

@@ -1,0 +1,9 @@
+{
+  "enabled": true,
+  "mode": "invalid_mode",
+  "level": "ultra",
+  "language": "xxx",
+  "minLength": -5,
+  "skipPatterns": [],
+  "customInstructions": ""
+}
