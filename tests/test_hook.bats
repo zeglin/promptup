@@ -13,11 +13,6 @@ teardown() {
   rm -f "$PROMPTUP_CONFIG_PATH"
 }
 
-_make_stdin() {
-  local prompt="$1"
-  python3 -c "import json, sys; print(json.dumps({'session_id':'test','hook_event_name':'UserPromptSubmit','prompt':sys.argv[1],'cwd':'/tmp'}))" "$prompt"
-}
-
 @test "hook passes through when config missing (disabled)" {
   rm -f "$PROMPTUP_CONFIG_PATH"
   run bash -c '_make_stdin() { python3 -c "import json,sys; print(json.dumps({\"session_id\":\"test\",\"hook_event_name\":\"UserPromptSubmit\",\"prompt\":sys.argv[1],\"cwd\":\"/tmp\"}))" "$1"; }; _make_stdin "Please fix the auth bug in the login module" | '"$HOOK"

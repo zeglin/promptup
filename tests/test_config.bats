@@ -47,21 +47,23 @@ setup() {
 
 @test "load_config treats invalid JSON as disabled and warns to stderr" {
   export PROMPTUP_CONFIG_PATH="$SCRIPT_DIR/fixtures/invalid_json.json"
-  load_config 2>stderr_output.txt
+  local stderr_file="${BATS_TMPDIR}/stderr_$$_invalid_json.txt"
+  load_config 2>"$stderr_file"
   [ "$PROMPTUP_ENABLED" = "false" ]
-  grep -q "Config error" stderr_output.txt
-  rm -f stderr_output.txt
+  grep -q "Config error" "$stderr_file"
+  rm -f "$stderr_file"
 }
 
 @test "load_config falls back invalid fields to defaults with stderr warning" {
   export PROMPTUP_CONFIG_PATH="$SCRIPT_DIR/fixtures/invalid_fields.json"
-  load_config 2>stderr_output.txt
+  local stderr_file="${BATS_TMPDIR}/stderr_$$_invalid_fields.txt"
+  load_config 2>"$stderr_file"
   [ "$PROMPTUP_MODE" = "show-and-send" ]  # fell back from "invalid_mode"
   [ "$PROMPTUP_LEVEL" = "medium" ]          # fell back from "ultra"
   [ "$PROMPTUP_LANGUAGE" = "auto" ]         # fell back from "xxx" (3 letters, fails format)
   [ "$PROMPTUP_MIN_LENGTH" = "20" ]         # fell back from -5
-  grep -q "Invalid value" stderr_output.txt
-  rm -f stderr_output.txt
+  grep -q "Invalid value" "$stderr_file"
+  rm -f "$stderr_file"
 }
 
 @test "load_config fills missing fields with defaults" {

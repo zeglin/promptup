@@ -122,7 +122,7 @@ INSTRUCTIONS
   # Custom instructions
   if [ -n "$custom" ]; then
     echo ""
-    echo "ADDITIONAL INSTRUCTIONS: $custom"
+    printf 'ADDITIONAL INSTRUCTIONS: %s\n' "$custom"
   fi
 }
 

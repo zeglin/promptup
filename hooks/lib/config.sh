@@ -29,7 +29,7 @@ PYEOF
 
 _validate_enum() {
   local value="$1" valid_values="$2"
-  echo "$valid_values" | tr ' ' '\n' | grep -qx "$value"
+  echo "$valid_values" | tr ' ' '\n' | grep -qxF "$value"
 }
 
 _validate_language() {
